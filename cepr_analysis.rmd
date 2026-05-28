@@ -1,0 +1,295 @@
+
+
+
+```{r}
+
+library(haven)
+library(dplyr)
+
+# Helper function to read and combine years
+make_bind <- function(year_start, year_end) {
+  lapply(year_start:year_end, function(yr) {
+    read_dta(paste0("/Users/bengelman/Downloads/cali/cepr_org_", yr, ".dta")) %>%
+      mutate(across(everything(), as.character))
+  }) %>% 
+    bind_rows() %>%
+    type.convert(as.is = TRUE)  # convert columns back to appropriate types
+}
+
+# 1983-1987
+cpsr_bind4_8387 <- make_bind(1983, 1987)
+
+# 1988-1992
+cpsr_bind4_8892 <- make_bind(1988, 1992)
+
+# 1993-1997
+cpsr_bind4_9397 <- make_bind(1993, 1997)
+
+# 1998-2002
+cpsr_bind4_9802 <- make_bind(1998, 2002)
+
+# 2003-2007
+cpsr_bind4_0307 <- make_bind(2003, 2007)
+
+# 2008-2012
+cpsr_bind4_0812 <- make_bind(2008, 2012)
+
+# 2013-2017
+cpsr_bind4_1317 <- make_bind(2013, 2017)
+
+```
+
+
+
+
+```{r}
+
+library(ggplot2)
+
+
+
+# =============================================================================
+# HELPER: takes a bind4 df, a state filter, an industry filter, a formula,
+# a weight column, and returns avg_pct_diff
+# state_filter:    "ca" | "nonca" | "all"
+# ind_filter:      "construction" | "nonconstruction"
+# ind_col:         "ind_2d" | "ind_nber"
+# =============================================================================
+
+calc_pct_premium <- function(df, state_filter, ind_filter, ind_col, formula_rhs, weight_col) {
+
+  # State subset
+  if (state_filter == "ca")    df <- subset(df, state == 93)
+  if (state_filter == "nonca") df <- subset(df, state != 93)
+
+  # Industry subset
+  if (ind_filter == "construction")    df <- subset(df, df[[ind_col]] == 4)
+  if (ind_filter == "nonconstruction") df <- subset(df, df[[ind_col]] != 4)
+
+  if (nrow(df) == 0) return(NA)
+
+  df$race   <- as.factor(df$wbhao)
+  df$county <- as.factor(df$fipscounty)
+
+  fmla  <- as.formula(paste("wage3 ~", formula_rhs))
+  model <- tryCatch(
+    lm(fmla, data = df, weights = df[[weight_col]]),
+    error = function(e) { message("lm error: ", e$message); return(NULL) }
+  )
+  if (is.null(model)) return(NA)
+
+  uw          <- subset(df, union == 1)
+  if (nrow(uw) < 10) return(NA)
+  hours       <- mean(uw$uhourse, na.rm = TRUE)
+  cf          <- uw
+  cf$union    <- 0
+  pred_cf     <- predict(model, newdata = cf)
+
+  actual <- uw$wage3  * uw$uhourse 
+  cfact  <- pred_cf   * uw$uhourse 
+
+  mean((actual - cfact) / cfact * 100, na.rm = TRUE)
+}
+
+# =============================================================================
+# Per-window settings: which ind col, which formula, which weight
+#varies depending on data availability
+# =============================================================================
+
+window_meta <- list(
+  "2013-2017" = list(df = "cpsr_bind4_1317", ind_col = "ind_2d",
+                     rhs = "union + age + educ + race + female + married + forborn + year + county",
+                     wt  = "lonwgt"),
+  "2008-2012" = list(df = "cpsr_bind4_0812", ind_col = "ind_2d",
+                     rhs = "union + age + educ + race + female + married + forborn + year + county",
+                     wt  = "lonwgt"),
+  "2003-2007" = list(df = "cpsr_bind4_0307", ind_col = "ind_2d",
+                     rhs = "union + age + educ + race + female + married + forborn + year + county",
+                     wt  = "lonwgt"),
+  "1998-2002" = list(df = "cpsr_bind4_9802", ind_col = "ind_nber",
+                     rhs = "union + age + educ + race + female + married + forborn + year + county",
+                     wt  = "lonwgt"),
+  "1993-1997" = list(df = "cpsr_bind4_9397", ind_col = "ind_nber",
+                     rhs = "union + age + educ + race + female + married + forborn + year + county",
+                     wt  = "lonwgt"),
+  "1988-1992" = list(df = "cpsr_bind4_8892", ind_col = "ind_nber",
+                     rhs = "union + age + educ + race + female + married + year",
+                     wt  = "fnlwgt"),
+  "1983-1987" = list(df = "cpsr_bind4_8387", ind_col = "ind_nber",
+                     rhs = "union + age + educ + female + married + year",
+                     wt  = "fnlwgt")
+)
+
+period_order <- names(window_meta)
+
+# =============================================================================
+# CLEAR MEMORY — keep only the cpsr_bind4_ objects and avg_pct_diff_ values
+# =============================================================================
+
+keep <- c(
+  # bound datasets needed for the new calculations
+  "cpsr_bind4_1317", "cpsr_bind4_0812", "cpsr_bind4_0307",
+  "cpsr_bind4_9802", "cpsr_bind4_9397", "cpsr_bind4_8892", "cpsr_bind4_8387",
+  # existing results needed for the CA construction plot
+  "avg_pct_diff_1317", "avg_pct_diff_0812", "avg_pct_diff_0307",
+  "avg_pct_diff_9802", "avg_pct_diff_9397", "avg_pct_diff_8892", "avg_pct_diff_8387",
+  # the meta list and helper function defined above
+  "window_meta", "calc_pct_premium", "period_order", "weeks_worked"
+)
+
+rm(list = setdiff(ls(), keep))
+gc()
+
+# =============================================================================
+# LOOP — compute all four series for each window
+# =============================================================================
+
+results <- do.call(rbind, lapply(period_order, function(period) {
+  meta <- window_meta[[period]]
+  df   <- get(meta$df)   # fetch the already-loaded bind4 object by name
+
+  ca_con    <- calc_pct_premium(df, "ca",    "construction",    meta$ind_col, meta$rhs, meta$wt)
+  nonca_con <- calc_pct_premium(df, "nonca", "construction",    meta$ind_col, meta$rhs, meta$wt)
+  ca_noncon <- calc_pct_premium(df, "ca",    "nonconstruction", meta$ind_col, meta$rhs, meta$wt)
+  nonca_noncon <- calc_pct_premium(df, "nonca", "nonconstruction", meta$ind_col, meta$rhs, meta$wt)
+
+  data.frame(
+    period       = period,
+    ca_con       = ca_con,
+    nonca_con    = nonca_con,
+    ca_noncon    = ca_noncon,
+    nonca_noncon = nonca_noncon
+  )
+}))
+
+
+# Reshape to long for ggplot
+results_long <- reshape(results,
+  varying   = c("ca_con", "nonca_con", "ca_noncon", "nonca_noncon"),
+  v.names   = "pct_premium",
+  timevar   = "series",
+  times     = c("CA Construction", "Non-CA Construction",
+                "CA Non-Construction", "Non-CA Non-Construction"),
+  direction = "long"
+)
+results_long$period <- factor(results_long$period, levels = period_order)
+
+results
+```
+
+
+
+```{r}
+# =============================================================================
+# THEME
+# =============================================================================
+
+theme_union <- theme_minimal(base_size = 13) +
+  theme(
+    plot.title       = element_text(face = "bold", size = 15, margin = margin(b = 6)),
+    plot.subtitle    = element_text(size = 11, color = "grey40", margin = margin(b = 10)),
+    plot.caption     = element_text(size = 9,  color = "grey50"),
+    axis.text.x      = element_text(angle = 35, hjust = 1),
+    panel.grid.minor = element_blank(),
+    legend.position  = "top",
+    legend.title     = element_blank()
+  )
+
+series_colors <- c(
+  "CA Construction"        = "#d62728",
+  "Non-CA Construction"    = "#1f77b4",
+  "CA Non-Construction"    = "#e07b39",
+  "Non-CA Non-Construction"= "#2ca02c"
+)
+
+# =============================================================================
+# PLOT 1 — CA Construction premium over time (standalone)
+# =============================================================================
+
+p1 <- ggplot(subset(results_long, series == "CA Construction"),
+             aes(x = period, y = pct_premium, group = 1)) +
+  geom_col(fill = "#d62728", width = 0.7) +
+  geom_line(color = "#7f0000", linewidth = 0.8) +
+  geom_point(color = "#7f0000", size = 2.5) +
+  scale_y_continuous(labels = function(x) paste0(round(x, 1), "%")) +
+  labs(
+    title    = "Union Weekly Wage Premium – CA Construction Workers",
+    subtitle = "Percent premium, union vs. comparable non-union (5-year windows)",
+    x = NULL, y = "Premium (%)",
+    caption  = "Source: CEPR ORG. Controls vary by period to match available variables."
+  ) +
+  theme_union
+
+p1
+
+```
+
+
+
+```{r}
+# =============================================================================
+# PLOT 2 — CA Construction vs Non-CA Construction
+# =============================================================================
+
+p2 <- ggplot(subset(results_long, series %in% c("CA Construction", "Non-CA Construction")),
+             aes(x = period, y = pct_premium, color = series, group = series)) +
+  geom_line(linewidth = 1.1) +
+  geom_point(size = 3) +
+  scale_color_manual(values = series_colors) +
+  scale_y_continuous(labels = function(x) paste0(round(x, 1), "%")) +
+  labs(
+    title    = "Construction Union Weekly Wage Premium: California vs. Rest of Country",
+    subtitle = "Percent premium (5-year windows)",
+    x = NULL, y = "Premium (%)",
+    caption  = "Source: CEPR ORG."
+  ) +
+  theme_union
+
+# =============================================================================
+# PLOT 3 — Non-construction industries: CA vs Non-CA
+# =============================================================================
+
+p3 <- ggplot(subset(results_long, series %in% c("CA Non-Construction", "Non-CA Non-Construction")),
+             aes(x = period, y = pct_premium, color = series, group = series)) +
+  geom_line(linewidth = 1.1) +
+  geom_point(size = 3) +
+  scale_color_manual(values = series_colors) +
+  scale_y_continuous(labels = function(x) paste0(round(x, 1), "%")) +
+  labs(
+    title    = "Union Weekly Wage Premium – All Industries Except Construction",
+    subtitle = "California vs. Rest of Country (5-year windows)",
+    x = NULL, y = "Premium (%)",
+    caption  = "Source: CEPR ORG."
+  ) +
+  theme_union
+
+# =============================================================================
+# PLOT 4 — All four series together
+# =============================================================================
+results_long$period <- factor(results_long$period, levels = rev(period_order))
+p4 <- ggplot(results_long,
+             aes(x = period, y = pct_premium, color = series, group = series)) +
+  geom_line(linewidth = 1.1) +
+  geom_point(size = 3) +
+  scale_color_manual(values = series_colors) +
+  scale_y_continuous(labels = function(x) paste0(round(x, 1), "%")) +
+  labs(
+    title    = "Union Weekly Wage Premium by Sector and Region",
+    subtitle = "Percent premium (5-year windows)",
+    x = NULL, y = "Premium (%)",
+    caption  = "Source: CEPR ORG."
+  ) +
+  theme_union +
+  theme(
+    plot.title  = element_text(size = 14),
+    legend.title = element_text(size = 10),
+    legend.text  = element_text(size = 7)
+  )
+```
+
+```{r}
+p1
+p2
+p3
+p4
+```
