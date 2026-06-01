@@ -9,11 +9,15 @@ library(dplyr)
 # Helper function to read and combine years
 make_bind <- function(year_start, year_end) {
   lapply(year_start:year_end, function(yr) {
-    read_dta(paste0("/Users/bengelman/Downloads/cali/cepr_org_", yr, ".dta")) %>%
+    zip_path <- paste0("data/cepr_org_", yr, ".zip")
+    tmp_dir  <- tempdir()
+    unzip(zip_path, exdir = tmp_dir)
+    dta_file <- file.path(tmp_dir, paste0("cepr_org_", yr, ".dta"))
+    read_dta(dta_file) %>%
       mutate(across(everything(), as.character))
-  }) %>% 
+  }) %>%
     bind_rows() %>%
-    type.convert(as.is = TRUE)  # convert columns back to appropriate types
+    type.convert(as.is = TRUE)
 }
 
 # 1983-1987
