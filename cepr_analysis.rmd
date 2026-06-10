@@ -9,16 +9,17 @@ library(dplyr)
 # Helper function to read and combine years
 make_bind <- function(year_start, year_end) {
   lapply(year_start:year_end, function(yr) {
-    zip_path <- paste0("data/cepr_org_", yr, ".zip")
-    tmp_dir  <- tempdir()
-    unzip(zip_path, exdir = tmp_dir)
-    dta_file <- file.path(tmp_dir, paste0("cepr_org_", yr, ".dta"))
-    read_dta(dta_file) %>%
+    read_dta(paste0("/Users/bengelman/Downloads/cali/cepr_org_", yr, ".dta")) %>%
       mutate(across(everything(), as.character))
-  }) %>%
+  }) %>% 
     bind_rows() %>%
-    type.convert(as.is = TRUE)
+    type.convert(as.is = TRUE)  # convert columns back to appropriate types
 }
+
+unique(cpsr_bind4_8387$educ)
+
+unique(cpsr_bind4_0812$educ)
+
 
 # 1983-1987
 cpsr_bind4_8387 <- make_bind(1983, 1987)
@@ -40,40 +41,32 @@ cpsr_bind4_0812 <- make_bind(2008, 2012)
 
 # 2013-2017
 cpsr_bind4_1317 <- make_bind(2013, 2017)
-
+unique(cpsr_bind4_1317$fipscounty[cpsr_bind4_1317$state==93])
 ```
 
 
 
-
 ```{r}
-
 library(ggplot2)
-
-
 
 # =============================================================================
 # HELPER: takes a bind4 df, a state filter, an industry filter, a formula,
 # a weight column, and returns avg_pct_diff
-# state_filter:    "ca" | "nonca" | "all"
-# ind_filter:      "construction" | "nonconstruction"
-# ind_col:         "ind_2d" | "ind_nber"
 # =============================================================================
 
 calc_pct_premium <- function(df, state_filter, ind_filter, ind_col, formula_rhs, weight_col) {
 
-  # State subset
   if (state_filter == "ca")    df <- subset(df, state == 93)
   if (state_filter == "nonca") df <- subset(df, state != 93)
 
-  # Industry subset
   if (ind_filter == "construction")    df <- subset(df, df[[ind_col]] == 4)
   if (ind_filter == "nonconstruction") df <- subset(df, df[[ind_col]] != 4)
 
   if (nrow(df) == 0) return(NA)
 
-  df$race   <- as.factor(df$wbhao)
+  df$race   <- as.factor(df$wbho)
   df$county <- as.factor(df$fipscounty)
+  df$educ_factor <- as.factor(df$educ)
 
   fmla  <- as.formula(paste("wage3 ~", formula_rhs))
   model <- tryCatch(
@@ -89,85 +82,149 @@ calc_pct_premium <- function(df, state_filter, ind_filter, ind_col, formula_rhs,
   cf$union    <- 0
   pred_cf     <- predict(model, newdata = cf)
 
-  actual <- uw$wage3  * uw$uhourse 
-  cfact  <- pred_cf   * uw$uhourse 
+  actual <- uw$wage3 * uw$uhourse
+  cfact  <- pred_cf  * uw$uhourse
 
   mean((actual - cfact) / cfact * 100, na.rm = TRUE)
 }
 
 # =============================================================================
-# Per-window settings: which ind col, which formula, which weight
-#varies depending on data availability
+# HELPER: weighted union density
+# union == 1 among all workers (not just union) in the subset
+# =============================================================================
+
+calc_union_density <- function(df, state_filter, ind_filter, ind_col, weight_col) {
+
+  if (state_filter == "ca")    df <- subset(df, state == 93)
+  if (state_filter == "nonca") df <- subset(df, state != 93)
+
+  if (ind_filter == "construction")    df <- subset(df, df[[ind_col]] == 4)
+  if (ind_filter == "nonconstruction") df <- subset(df, df[[ind_col]] != 4)
+  if (ind_filter == "all")             {}   # no industry filter
+
+  if (nrow(df) == 0) return(NA)
+
+  w        <- df[[weight_col]]
+  is_union <- as.integer(df$union == 1)
+
+  sum(w * is_union, na.rm = TRUE) / sum(w[!is.na(is_union)], na.rm = TRUE) * 100
+}
+
+# =============================================================================
+# Per-window settings
 # =============================================================================
 
 window_meta <- list(
   "2013-2017" = list(df = "cpsr_bind4_1317", ind_col = "ind_2d",
-                     rhs = "union + age + educ + race + female + married + forborn + year + county",
+                     rhs = "union + age + educ_factor + race + female + married + forborn + year + county",
                      wt  = "lonwgt"),
   "2008-2012" = list(df = "cpsr_bind4_0812", ind_col = "ind_2d",
-                     rhs = "union + age + educ + race + female + married + forborn + year + county",
+                     rhs = "union + age + educ_factor + race + female + married + forborn + year + county",
                      wt  = "lonwgt"),
   "2003-2007" = list(df = "cpsr_bind4_0307", ind_col = "ind_2d",
-                     rhs = "union + age + educ + race + female + married + forborn + year + county",
+                     rhs = "union + age + educ_factor + race + female + married + forborn + year + county",
                      wt  = "lonwgt"),
   "1998-2002" = list(df = "cpsr_bind4_9802", ind_col = "ind_nber",
-                     rhs = "union + age + educ + race + female + married + forborn + year + county",
+                     rhs = "union + age + educ_factor + race + female + married + forborn + year + county",
                      wt  = "lonwgt"),
   "1993-1997" = list(df = "cpsr_bind4_9397", ind_col = "ind_nber",
-                     rhs = "union + age + educ + race + female + married + forborn + year + county",
+                     rhs = "union + age + educ_factor + race + female + married + forborn + year + county",
                      wt  = "lonwgt"),
   "1988-1992" = list(df = "cpsr_bind4_8892", ind_col = "ind_nber",
-                     rhs = "union + age + educ + race + female + married + year",
+                     rhs = "union + age + educ_factor + race + female + married + year+race",
                      wt  = "fnlwgt"),
   "1983-1987" = list(df = "cpsr_bind4_8387", ind_col = "ind_nber",
-                     rhs = "union + age + educ + female + married + year",
+                     rhs = "union + age + educ_factor + female + married + year+race+married",
                      wt  = "fnlwgt")
 )
 
 period_order <- names(window_meta)
 
 # =============================================================================
-# CLEAR MEMORY — keep only the cpsr_bind4_ objects and avg_pct_diff_ values
+# CLEAR MEMORY
 # =============================================================================
 
 keep <- c(
-  # bound datasets needed for the new calculations
   "cpsr_bind4_1317", "cpsr_bind4_0812", "cpsr_bind4_0307",
   "cpsr_bind4_9802", "cpsr_bind4_9397", "cpsr_bind4_8892", "cpsr_bind4_8387",
-  # existing results needed for the CA construction plot
   "avg_pct_diff_1317", "avg_pct_diff_0812", "avg_pct_diff_0307",
   "avg_pct_diff_9802", "avg_pct_diff_9397", "avg_pct_diff_8892", "avg_pct_diff_8387",
-  # the meta list and helper function defined above
-  "window_meta", "calc_pct_premium", "period_order", "weeks_worked"
+  "window_meta", "calc_pct_premium", "calc_union_density", "period_order", "weeks_worked"
 )
 
 rm(list = setdiff(ls(), keep))
 gc()
 
 # =============================================================================
-# LOOP — compute all four series for each window
+# LOOP — compute premium + density for each window
 # =============================================================================
 
 results <- do.call(rbind, lapply(period_order, function(period) {
   meta <- window_meta[[period]]
-  df   <- get(meta$df)   # fetch the already-loaded bind4 object by name
+  df   <- get(meta$df)
 
-  ca_con    <- calc_pct_premium(df, "ca",    "construction",    meta$ind_col, meta$rhs, meta$wt)
-  nonca_con <- calc_pct_premium(df, "nonca", "construction",    meta$ind_col, meta$rhs, meta$wt)
-  ca_noncon <- calc_pct_premium(df, "ca",    "nonconstruction", meta$ind_col, meta$rhs, meta$wt)
+  # --- Union wage premium ---
+  ca_con       <- calc_pct_premium(df, "ca",    "construction",    meta$ind_col, meta$rhs, meta$wt)
+  nonca_con    <- calc_pct_premium(df, "nonca", "construction",    meta$ind_col, meta$rhs, meta$wt)
+  ca_noncon    <- calc_pct_premium(df, "ca",    "nonconstruction", meta$ind_col, meta$rhs, meta$wt)
   nonca_noncon <- calc_pct_premium(df, "nonca", "nonconstruction", meta$ind_col, meta$rhs, meta$wt)
 
+  # --- Union density ---
+  den_ca_all      <- calc_union_density(df, "ca",    "all",          meta$ind_col, meta$wt)
+  den_ca_con      <- calc_union_density(df, "ca",    "construction", meta$ind_col, meta$wt)
+  den_nonca_all   <- calc_union_density(df, "nonca", "all",          meta$ind_col, meta$wt)
+  den_nonca_con   <- calc_union_density(df, "nonca", "construction", meta$ind_col, meta$wt)
+
   data.frame(
-    period       = period,
-    ca_con       = ca_con,
-    nonca_con    = nonca_con,
-    ca_noncon    = ca_noncon,
-    nonca_noncon = nonca_noncon
+    period           = period,
+    ca_con           = ca_con,
+    nonca_con        = nonca_con,
+    ca_noncon        = ca_noncon,
+    nonca_noncon     = nonca_noncon,
+    den_ca_all       = den_ca_all,
+    den_ca_con       = den_ca_con,
+    den_nonca_all    = den_nonca_all,
+    den_nonca_con    = den_nonca_con
   )
 }))
 
+results$period <- factor(results$period, levels = period_order)
 
-# Reshape to long for ggplot
+# =============================================================================
+# PLOT 2: Union density
+# =============================================================================
+
+density_long <- reshape(results,
+  varying   = c("den_ca_all", "den_ca_con", "den_nonca_all", "den_nonca_con"),
+  v.names   = "density",
+  timevar   = "series",
+  times     = c("CA All Industries", "CA Construction",
+                "Non-CA All Industries", "Non-CA Construction"),
+  direction = "long"
+)
+density_long$period <- factor(density_long$period, levels = period_order)
+
+p_density <- ggplot(density_long, aes(x = period, y = density,
+                                       color = series, group = series)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2.5) +
+  labs(
+    title   = "Union Density Over Time",
+    x       = "Period",
+    y       = "Union Membership Rate (%)",
+    color   = NULL,
+    caption = "Source: CEPR ORG"
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.x      = element_text(angle = 45, hjust = 1),
+    plot.caption     = element_text(hjust = 1)
+  ) +
+  scale_x_discrete(limits = rev(period_order))
+print(p_density)
+
+results
+
 results_long <- reshape(results,
   varying   = c("ca_con", "nonca_con", "ca_noncon", "nonca_noncon"),
   v.names   = "pct_premium",
@@ -178,8 +235,9 @@ results_long <- reshape(results,
 )
 results_long$period <- factor(results_long$period, levels = period_order)
 
-results
+
 ```
+
 
 
 
@@ -291,9 +349,394 @@ p4 <- ggplot(results_long,
   )
 ```
 
+
+
 ```{r}
-p1
-p2
-p3
+
 p4
 ```
+
+
+
+
+
+
+```{r}
+# =============================================================================
+# PLOT 4 REMAKE — All periods using 1983-1987 spec
+# (union + age + educ + female + married + year, fnlwgt, no race/county/forborn)
+# =============================================================================
+
+rhs_simple <- "union + age + educ + female + married + year+race"
+wt_simple  <- "longwt"
+
+# For ind_col: use ind_2d for 2003+ windows, ind_nber for earlier windows
+window_meta_simple <- list(
+  "2013-2017" = list(df = "cpsr_bind4_1317", ind_col = "ind_2d"),
+  "2008-2012" = list(df = "cpsr_bind4_0812", ind_col = "ind_2d"),
+  "2003-2007" = list(df = "cpsr_bind4_0307", ind_col = "ind_2d"),
+  "1998-2002" = list(df = "cpsr_bind4_9802", ind_col = "ind_nber"),
+  "1993-1997" = list(df = "cpsr_bind4_9397", ind_col = "ind_nber"),
+  "1988-1992" = list(df = "cpsr_bind4_8892", ind_col = "ind_nber"),
+  "1983-1987" = list(df = "cpsr_bind4_8387", ind_col = "ind_nber")
+)
+
+results_simple <- do.call(rbind, lapply(period_order, function(period) {
+  meta <- window_meta_simple[[period]]
+  df   <- get(meta$df)
+
+  ca_con       <- calc_pct_premium(df, "ca",    "construction",    meta$ind_col, rhs_simple, wt_simple)
+  nonca_con    <- calc_pct_premium(df, "nonca", "construction",    meta$ind_col, rhs_simple, wt_simple)
+  ca_noncon    <- calc_pct_premium(df, "ca",    "nonconstruction", meta$ind_col, rhs_simple, wt_simple)
+  nonca_noncon <- calc_pct_premium(df, "nonca", "nonconstruction", meta$ind_col, rhs_simple, wt_simple)
+
+  data.frame(
+    period       = period,
+    ca_con       = ca_con,
+    nonca_con    = nonca_con,
+    ca_noncon    = ca_noncon,
+    nonca_noncon = nonca_noncon
+  )
+}))
+
+results_simple$period <- factor(results_simple$period, levels = rev(period_order))
+
+results_long_simple <- reshape(results_simple,
+  varying   = c("ca_con", "nonca_con", "ca_noncon", "nonca_noncon"),
+  v.names   = "pct_premium",
+  timevar   = "series",
+  times     = c("CA Construction", "Non-CA Construction",
+                "CA Non-Construction", "Non-CA Non-Construction"),
+  direction = "long"
+)
+results_long_simple$period <- factor(results_long_simple$period, levels = rev(period_order))
+
+p4_simple <- ggplot(results_long_simple,
+                    aes(x = period, y = pct_premium, color = series, group = series)) +
+  geom_line(linewidth = 1.1) +
+  geom_point(size = 3) +
+  scale_color_manual(values = series_colors) +
+  scale_y_continuous(labels = function(x) paste0(round(x, 1), "%")) +
+  labs(
+    title    = "Union Weekly Wage Premium by Sector and Region",
+    subtitle = "Uniform 1983–1987 specification",
+    x = NULL, y = "Premium (%)",
+    caption  = "Source: CEPR ORG. Uniform specification."
+  ) +
+  theme_union +
+  theme(
+    plot.title   = element_text(size = 14),
+    legend.title = element_text(size = 10),
+    legend.text  = element_text(size = 7)
+  )
+
+p4_simple
+```
+
+
+
+
+
+
+```{r}
+ca_noncon_0307 <- subset(cpsr_bind4_0307, state == 93 & ind_2d != 4)
+
+nrow(ca_noncon_0307)
+head(ca_noncon_0307)
+summary(ca_noncon_0307[, c("wage3", "union", "fnlwgt", "ind_2d")])
+```
+
+
+
+```{r}
+all_periods <- list(
+  "1983-1987" = list(df = cpsr_bind4_8387, ind_col = "ind_nber", wt = "fnlwgt"),
+  "1988-1992" = list(df = cpsr_bind4_8892, ind_col = "ind_nber", wt = "fnlwgt"),
+  "1993-1997" = list(df = cpsr_bind4_9397, ind_col = "ind_nber", wt = "lonwgt"),
+  "1998-2002" = list(df = cpsr_bind4_9802, ind_col = "ind_nber", wt = "lonwgt"),
+  "2003-2007" = list(df = cpsr_bind4_0307, ind_col = "ind_2d",   wt = "lonwgt"),
+  "2008-2012" = list(df = cpsr_bind4_0812, ind_col = "ind_2d",   wt = "lonwgt"),
+  "2013-2017" = list(df = cpsr_bind4_1317, ind_col = "ind_2d",   wt = "lonwgt")
+)
+
+dist_summary <- do.call(rbind, lapply(names(all_periods), function(period) {
+  meta <- all_periods[[period]]
+  df   <- meta$df
+ # df   <- subset(df, df[[meta$ind_col]] != 4)  # non-construction only
+
+  do.call(rbind, lapply(c("California", "Rest of Country"), function(reg) {
+    sub <- if (reg == "California") subset(df, state == 93) else subset(df, state != 93)
+    if (nrow(sub) == 0) return(NULL)
+
+    do.call(rbind, lapply(c("Union", "Non-Union"), function(ul) {
+      s <- subset(sub, union == ifelse(ul == "Union", 1, 0))
+      if (nrow(s) == 0) return(NULL)
+      w <- s[[meta$wt]]
+
+      # race
+      race_tbl <- tapply(w, as.integer(s$wbho), sum, na.rm = TRUE)
+      race_tbl <- race_tbl / sum(race_tbl, na.rm = TRUE) * 100
+      race_df  <- data.frame(
+        period      = period,
+        region      = reg,
+        union_label = ul,
+        var         = "Race",
+        category    = names(race_tbl),
+        pct         = as.numeric(race_tbl)
+      )
+
+      # educ
+      educ_tbl <- tapply(w, as.integer(s$educ), sum, na.rm = TRUE)
+      educ_tbl <- educ_tbl / sum(educ_tbl, na.rm = TRUE) * 100
+      educ_df  <- data.frame(
+        period      = period,
+        region      = reg,
+        union_label = ul,
+        var         = "Education",
+        category    = names(educ_tbl),
+        pct         = as.numeric(educ_tbl)
+      )
+
+      rbind(race_df, educ_df)
+    }))
+  }))
+}))
+
+dist_summary$period      <- factor(dist_summary$period, levels = names(all_periods))
+dist_summary$union_label <- factor(dist_summary$union_label, levels = c("Union", "Non-Union"))
+
+
+race_labels <- c("1" = "White", "2" = "Black", "3" = "Hispanic", "4" = "Other")
+educ_labels <- c("1" = "Less than HS", "2" = "High School", "3" = "Some College",
+                 "4" = "College", "5" = "Advanced")
+
+race_df <- subset(dist_summary, var == "Race")
+race_df <- subset(race_df, category %in% names(race_labels))
+race_df$category_label <- factor(race_labels[race_df$category], levels = unname(race_labels))
+
+educ_df <- subset(dist_summary, var == "Education")
+educ_df <- subset(educ_df, category %in% names(educ_labels))
+educ_df$category_label <- factor(educ_labels[educ_df$category], levels = unname(educ_labels))
+```
+
+
+```{r}
+# =============================================================================
+# Stacked bar charts: race & educ composition by period, union vs non-union
+# =============================================================================
+
+race_colors <- c(
+  "White"    = "#4e79a7",
+  "Black"    = "#f28e2b",
+  "Hispanic" = "#59a14f",
+  "Other"    = "#b07aa1"
+)
+
+educ_colors <- c(
+  "Less than HS" = "#4e79a7",
+  "High School"  = "#f28e2b",
+  "Some College" = "#59a14f",
+  "College"      = "#e15759",
+  "Advanced"     = "#b07aa1"
+)
+
+# --- Race stacked bar ---
+p_race_stack <- ggplot(race_df, aes(x = period, y = pct, fill = category_label)) +
+  geom_col(position = "stack", width = 0.8) +
+  facet_grid(region ~ union_label) +
+  scale_fill_manual(values = race_colors) +
+  labs(
+    title    = "Race Composition Over Time: Union vs. Non-Union",
+    subtitle = "All workers; share within group",
+    x = NULL, y = "Share (%)", fill = NULL,
+    caption  = "Source: CEPR ORG."
+  ) +
+  theme_union +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# --- Educ stacked bar ---
+p_educ_stack <- ggplot(educ_df, aes(x = period, y = pct, fill = category_label)) +
+  geom_col(position = "stack", width = 0.8) +
+  facet_grid(region ~ union_label) +
+  scale_fill_manual(values = educ_colors) +
+  labs(
+    title    = "Education Composition Over Time: Union vs. Non-Union",
+    subtitle = "All workers; share within group",
+    x = NULL, y = "Share (%)", fill = NULL,
+    caption  = "Source: CEPR ORG."
+  ) +
+  theme_union +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+p_race_stack
+p_educ_stack
+
+
+
+
+
+educ_df
+
+
+
+
+
+```
+
+
+
+
+
+
+```{r}
+library(dplyr)
+
+educ_wide <- educ_df %>%
+  mutate(educ_num = as.integer(factor(category_label, levels = unname(educ_labels)))) %>%
+  group_by(period, region, union_label) %>%
+  summarise(avg_educ = weighted.mean(educ_num, pct), .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = union_label, values_from = avg_educ) %>%
+  mutate(union_gap = Union - `Non-Union`)
+
+print(educ_wide, n = Inf)
+
+
+educ_wide %>%
+  tidyr::pivot_wider(
+    names_from  = region,
+    values_from = c(Union, `Non-Union`, union_gap),
+    names_glue  = "{region}: {.value}"
+  ) %>%
+  arrange(period)
+```
+
+
+
+
+
+```{r}
+dist_summary_con <- do.call(rbind, lapply(names(all_periods), function(period) {
+  meta <- all_periods[[period]]
+  df   <- meta$df
+  df   <- subset(df, df[[meta$ind_col]] == 4)  # construction only
+
+  do.call(rbind, lapply(c("California", "Rest of Country"), function(reg) {
+    sub <- if (reg == "California") subset(df, state == 93) else subset(df, state != 93)
+    if (nrow(sub) == 0) return(NULL)
+
+    do.call(rbind, lapply(c("Union", "Non-Union"), function(ul) {
+      s <- subset(sub, union == ifelse(ul == "Union", 1, 0))
+      if (nrow(s) == 0) return(NULL)
+      w <- s[[meta$wt]]
+
+      race_tbl <- tapply(w, as.integer(s$wbho), sum, na.rm = TRUE)
+      race_tbl <- race_tbl[!is.na(race_tbl) & race_tbl > 0]
+      if (length(race_tbl) == 0) return(NULL)
+      race_tbl <- race_tbl / sum(race_tbl) * 100
+      race_df  <- data.frame(period = period, region = reg, union_label = ul,
+                             var = "Race", category = names(race_tbl),
+                             pct = as.numeric(race_tbl), stringsAsFactors = FALSE)
+
+      educ_tbl <- tapply(w, as.integer(s$educ), sum, na.rm = TRUE)
+      educ_tbl <- educ_tbl[!is.na(educ_tbl) & educ_tbl > 0]
+      if (length(educ_tbl) == 0) return(NULL)
+      educ_tbl <- educ_tbl / sum(educ_tbl) * 100
+      educ_df  <- data.frame(period = period, region = reg, union_label = ul,
+                             var = "Education", category = names(educ_tbl),
+                             pct = as.numeric(educ_tbl), stringsAsFactors = FALSE)
+
+      rbind(race_df, educ_df)
+    }))
+  }))
+}))
+
+dist_summary_con$period      <- factor(dist_summary_con$period, levels = names(all_periods))
+dist_summary_con$union_label <- factor(dist_summary_con$union_label, levels = c("Union", "Non-Union"))
+
+race_df_con <- subset(dist_summary_con, var == "Race")
+race_df_con <- subset(race_df_con, category %in% names(race_labels))
+race_df_con$category_label <- factor(race_labels[race_df_con$category], levels = unname(race_labels))
+
+educ_df_con <- subset(dist_summary_con, var == "Education")
+educ_df_con <- subset(educ_df_con, category %in% names(educ_labels))
+educ_df_con$category_label <- factor(educ_labels[educ_df_con$category], levels = unname(educ_labels))
+
+# --- Race stacked bar ---
+p_race_stack_con <- ggplot(race_df_con, aes(x = period, y = pct, fill = category_label)) +
+  geom_col(position = "stack", width = 0.8) +
+  facet_grid(region ~ union_label) +
+  scale_fill_manual(values = race_colors) +
+  labs(
+    title    = "Race Composition Over Time: Union vs. Non-Union",
+    subtitle = "Construction workers only; share within group",
+    x = NULL, y = "Share (%)", fill = NULL,
+    caption  = "Source: CEPR ORG."
+  ) +
+  theme_union +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# --- Educ stacked bar ---
+p_educ_stack_con <- ggplot(educ_df_con, aes(x = period, y = pct, fill = category_label)) +
+  geom_col(position = "stack", width = 0.8) +
+  facet_grid(region ~ union_label) +
+  scale_fill_manual(values = educ_colors) +
+  labs(
+    title    = "Education Composition Over Time: Union vs. Non-Union",
+    subtitle = "Construction workers only; share within group",
+    x = NULL, y = "Share (%)", fill = NULL,
+    caption  = "Source: CEPR ORG."
+  ) +
+  theme_union +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+p_race_stack_con
+p_educ_stack_con
+```
+
+
+
+
+
+
+
+
+
+```{r}
+library(dplyr)
+
+educ_wide_con <- educ_df_con %>%
+  mutate(educ_num = as.integer(factor(category_label, levels = unname(educ_labels)))) %>%
+  group_by(period, region, union_label) %>%
+  summarise(avg_educ = weighted.mean(educ_num, pct), .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = union_label, values_from = avg_educ) %>%
+  mutate(union_gap = Union - `Non-Union`) %>%
+  arrange(region, period)
+
+print(educ_wide_con, n = Inf)
+
+cat("\n--- California ---\n")
+print(subset(educ_wide_con, region == "California")[, c("period", "Union", "Non-Union", "union_gap")])
+
+cat("\n--- Rest of Country ---\n")
+print(subset(educ_wide_con, region == "Rest of Country")[, c("period", "Union", "Non-Union", "union_gap")])
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
