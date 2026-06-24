@@ -723,7 +723,103 @@ print(subset(educ_wide_con, region == "Rest of Country")[, c("period", "Union", 
 
 
 
+#no major difference if you turn off covariates or cut out weekly part
+```{r}
+# =============================================================================
+# HELPER v2: hourly wage only, no covariates (wage3 ~ union)
+# =============================================================================
 
+calc_pct_premium_simple <- function(df, state_filter, ind_filter, ind_col, weight_col) {
+
+  if (state_filter == "ca")    df <- subset(df, state == 93)
+  if (state_filter == "nonca") df <- subset(df, state != 93)
+
+  if (ind_filter == "construction")    df <- subset(df, df[[ind_col]] == 4)
+  if (ind_filter == "nonconstruction") df <- subset(df, df[[ind_col]] != 4)
+
+  if (nrow(df) == 0) return(NA)
+
+  # No covariates — just union status
+  model <- tryCatch(
+    lm(wage3 ~ union, data = df, weights = df[[weight_col]]),
+    error = function(e) { message("lm error: ", e$message); return(NULL) }
+  )
+  if (is.null(model)) return(NA)
+
+  uw <- subset(df, union == 1)
+  if (nrow(uw) < 10) return(NA)
+
+  cf       <- uw
+  cf$union <- 0
+
+  # Change 1: hourly wage directly (no * uhourse)
+  # Change 2: gap expressed as % of counterfactual hourly wage
+  actual  <- uw$wage3
+  cfact   <- predict(model, newdata = cf)
+
+  mean((actual - cfact) / cfact * 100, na.rm = TRUE)
+}
+
+# =============================================================================
+# LOOP — same structure, swap in the new helper
+# =============================================================================
+
+results_simple <- do.call(rbind, lapply(period_order, function(period) {
+  meta <- window_meta[[period]]
+  df   <- get(meta$df)
+
+  ca_con       <- calc_pct_premium_simple(df, "ca",    "construction",    meta$ind_col, meta$wt)
+  nonca_con    <- calc_pct_premium_simple(df, "nonca", "construction",    meta$ind_col, meta$wt)
+  ca_noncon    <- calc_pct_premium_simple(df, "ca",    "nonconstruction", meta$ind_col, meta$wt)
+  nonca_noncon <- calc_pct_premium_simple(df, "nonca", "nonconstruction", meta$ind_col, meta$wt)
+
+  data.frame(
+    period       = period,
+    ca_con       = ca_con,
+    nonca_con    = nonca_con,
+    ca_noncon    = ca_noncon,
+    nonca_noncon = nonca_noncon
+  )
+}))
+
+results_simple$period <- factor(results_simple$period, levels = period_order)
+
+# =============================================================================
+# RESHAPE + PLOT
+# =============================================================================
+
+results_long_simple <- reshape(results_simple,
+  varying   = c("ca_con", "nonca_con", "ca_noncon", "nonca_noncon"),
+  v.names   = "pct_premium",
+  timevar   = "series",
+  times     = c("CA Construction", "Non-CA Construction",
+                "CA Non-Construction", "Non-CA Non-Construction"),
+  direction = "long"
+)
+results_long_simple$period <- factor(results_long_simple$period, levels = period_order)
+
+p4_simple <- ggplot(results_long_simple,
+             aes(x = period, y = pct_premium, color = series, group = series)) +
+  geom_line(linewidth = 1.1) +
+  geom_point(size = 3) +
+  scale_color_manual(values = series_colors) +
+  scale_x_discrete(limits = rev(period_order)) +
+  scale_y_continuous(labels = function(x) paste0(round(x, 1), "%")) +
+  labs(
+    title    = "Union Hourly Wage Premium by Sector and Region",
+    subtitle = "Raw gap, no covariates (wage3 ~ union only)",
+    x = NULL, y = "Premium (%)",
+    caption  = "Source: CEPR ORG."
+  ) +
+  theme_union +
+  theme(
+    plot.title   = element_text(size = 14),
+    legend.title = element_text(size = 10),
+    legend.text  = element_text(size = 7)
+  )
+
+print(p4_simple)
+```
 
 
 
