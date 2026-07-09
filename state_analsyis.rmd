@@ -1,0 +1,102 @@
+
+sources: 
+https://constructioncoverage.com/research/cities-with-highest-home-price-to-income-ratios
+mit data lab
+https://www.census.gov/data/tables/time-series/demo/popest/2020s-state-total.html
+https://en.wikipedia.org/wiki/List_of_U.S._states_and_territories_by_population_density
+https://hdpulse.nimhd.nih.gov/data-portal/social/table?age=001&age_options=ageall_1&demo=00011&demo_options=income_3&race=00&race_options=race_7&sex=0&sex_options=sexboth_1&socialtopic=030&socialtopic_options=social_6&statefips=00&statefips_options=area_states
+
+
+#read in election data: pre 2024
+```{r}
+se <- read.csv("/Users/bengelman/Downloads/cali/1976-2024-president.csv")
+
+se <- subset(se,party_detailed == "DEMOCRAT"| party_detailed == "REPUBLICAN" )
+se$totalvotes <- as.numeric(se$totalvotes )
+se$candidatevotes <- as.numeric(se$candidatevotes )
+library(dplyr)
+library(tidyr)
+
+se <- se %>% distinct(year, state, party_detailed, .keep_all = TRUE)
+
+se_wide <- se %>%
+  filter(party_detailed %in% c("DEMOCRAT", "REPUBLICAN")) %>%
+  mutate(pct = candidatevotes / totalvotes) %>%
+  select(year, state, party_detailed, pct) %>%
+  pivot_wider(
+    names_from = c(party_detailed, year),
+    values_from = pct,
+    names_glue = "{tolower(party_detailed)}_pct_{year}"
+  )
+
+se_wide <- se_wide %>%
+  mutate(state = str_to_title(state))
+
+se_wide
+```
+
+
+#read in all other data
+```{r}
+sh <- read.csv("/Users/bengelman/Downloads/cali/state housing data.csv")
+
+state_data <- merge(sh, se_wide, by = "state")
+state_data <- state_data %>%
+  mutate(POPESTIMATE2025 = as.numeric(str_remove_all(POPESTIMATE2025, ",")))
+
+state_data <- state_data %>%
+  mutate(density_sq_m = as.numeric(str_remove_all(density_sq_m, ",")))
+
+state_data <- state_data %>%
+  mutate(median_hhi = as.numeric(str_remove_all(median_hhi, ",")))
+```
+
+
+
+
+#find top 10 price/income ratio, dem_pct 
+```{r}
+library(dplyr)
+
+# Top 5 by Home price to income ratio
+top10_price_income <- state_data %>%
+  arrange(desc(Home.price.to.income.ratio)) %>%
+  slice(1:10)
+
+# Top 5 by democrat_pct_2024
+top10_dem_pct <- state_data %>%
+  arrange(desc(dem_24)) %>%
+  slice(1:10)
+
+
+top10_dem_pct
+
+
+
+# Top 5 by median_hhi
+top10_median_hhi <- state_data %>%
+  arrange(desc(median_hhi)) %>%
+  slice(1:10)
+
+# View each
+
+
+state_data_flagged <- state_data %>%
+  mutate(
+    top10_price_income = rank(-Home.price.to.income.ratio) <= 10,
+    top10_dem_pct       = rank(-dem_24) <= 10,
+    top10_median_hhi    = rank(-median_hhi) <= 10
+  ) %>%
+  filter(top10_price_income | top10_dem_pct | top10_median_hhi)
+
+state_data_small <- select(state_data_flagged, c("state",  "top10_price_income", "top10_dem_pct", "top10_median_hhi"))
+
+
+#subset to those that are top 10 in all 3 categories
+state_data_small <- subset(state_data_small,top10_price_income == T & top10_median_hhi == T & top10_dem_pct == T)
+state_data_small
+
+
+
+```
+
