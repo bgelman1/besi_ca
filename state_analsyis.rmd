@@ -54,9 +54,8 @@ state_data <- state_data %>%
 
 
 
-#find top 10 price/income ratio, dem_pct 
+#find top 10 price/income ratio, dem_pct, population
 ```{r}
-library(dplyr)
 
 # Top 5 by Home price to income ratio
 top10_price_income <- state_data %>%
@@ -78,6 +77,10 @@ top10_median_hhi <- state_data %>%
   arrange(desc(median_hhi)) %>%
   slice(1:10)
 
+top10_pop <- state_data %>%
+  arrange(desc(POPESTIMATE2025)) %>%
+  slice(1:10)
+
 # View each
 
 
@@ -85,15 +88,16 @@ state_data_flagged <- state_data %>%
   mutate(
     top10_price_income = rank(-Home.price.to.income.ratio) <= 10,
     top10_dem_pct       = rank(-dem_24) <= 10,
-    top10_median_hhi    = rank(-median_hhi) <= 10
+    top10_median_hhi    = rank(-median_hhi) <= 10,
+     top10_pop   = rank(-POPESTIMATE2025) <= 10
   ) %>%
-  filter(top10_price_income | top10_dem_pct | top10_median_hhi)
+  filter(top10_price_income | top10_dem_pct | top10_median_hhi | top10_pop)
 
-state_data_small <- select(state_data_flagged, c("state",  "top10_price_income", "top10_dem_pct", "top10_median_hhi"))
+state_data_small <- select(state_data_flagged, c("state",  "top10_price_income", "top10_dem_pct", "top10_median_hhi", "top10_pop"))
 
 
 #subset to those that are top 10 in all 3 categories
-state_data_small <- subset(state_data_small,top10_price_income == T & top10_median_hhi == T & top10_dem_pct == T)
+state_data_small <- subset(state_data_small,top10_price_income == T & top10_pop == T & top10_dem_pct == T)
 state_data_small
 
 
